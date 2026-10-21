@@ -13,8 +13,14 @@ if not os.path.exists(CONFIG_PATH):
 with open(CONFIG_PATH) as f:
     config = json.load(f)
 
-STREAM_PID = None
+STREAM_PROC = None
 TORCH_ON = False
+
+
+def stream_running():
+    """True only while ffmpeg is actually alive - a crashed stream used to
+    keep reporting "running" because only the PID was remembered."""
+    return STREAM_PROC is not None and STREAM_PROC.poll() is None
 
 def cmd(args, capture=False, timeout=10):
     try:
@@ -24,23 +30,23 @@ def cmd(args, capture=False, timeout=10):
         return "" if capture else False
 
 def start_stream():
-    global STREAM_PID
-    if STREAM_PID:
+    global STREAM_PROC
+    if stream_running():
         return False
-    proc = subprocess.Popen([
+    STREAM_PROC = subprocess.Popen([
         "ffmpeg", "-f", "android_camera", "-input_device", "0",
         "-i", "0", "-c:v", "libx264", "-preset", "ultrafast",
         "-f", "rtsp", f"rtsp://0.0.0.0:{config['stream_port']}/live"
     ], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-    STREAM_PID = proc.pid
     return True
 
 def stop_stream():
-    global STREAM_PID
-    if not STREAM_PID:
+    global STREAM_PROC
+    if STREAM_PROC is None:
         return False
-    subprocess.run(["pkill", "-f", "ffmpeg.*android_camera"], capture_output=True)
-    STREAM_PID = None
+    if STREAM_PROC.poll() is None:
+        STREAM_PROC.terminate()
+    STREAM_PROC = None
     return True
 
 def get_ip():
@@ -159,7 +165,7 @@ def torch():
 @app.route("/stream", methods=["POST"])
 @require_auth
 def stream():
-    if STREAM_PID:
+    if stream_running():
         stop_stream()
         return jsonify({"stream": False})
     else:
@@ -177,7 +183,7 @@ def lock():
 def feed():
     def gen():
         while True:
-            if STREAM_PID:
+            if stream_running():
                 time.sleep(1)
                 continue
             try:
@@ -207,7 +213,7 @@ def status():
             pro = round(vals[0], 1)
     except:
         pass
-    return jsonify({"battery": bat, "proximity": pro, "stream": STREAM_PID is not None, "torch": TORCH_ON})
+    return jsonify({"battery": bat, "proximity": pro, "stream": stream_running(), "torch": TORCH_ON})
 
 app_bot = Application.builder().token(config["token"]).build()
 
@@ -250,7 +256,7 @@ async def h_torch(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
 
 async def h_stream(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     if not await auth(update): return
-    if STREAM_PID:
+    if stream_running():
         stop_stream()
         await update.message.reply_text("⏹️ Stream stopped")
     else:
