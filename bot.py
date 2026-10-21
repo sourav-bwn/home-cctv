@@ -1,4 +1,4 @@
-import os, sys, json, signal, subprocess, threading, time, io
+import os, sys, json, signal, subprocess, threading, time, io, hmac
 from functools import wraps
 from flask import Flask, request, Response, jsonify
 from telegram import Update
@@ -13,8 +13,14 @@ if not os.path.exists(CONFIG_PATH):
 with open(CONFIG_PATH) as f:
     config = json.load(f)
 
-STREAM_PID = None
+STREAM_PROC = None
 TORCH_ON = False
+
+
+def stream_running():
+    """True only while ffmpeg is actually alive - a crashed stream used to
+    keep reporting "running" because only the PID was remembered."""
+    return STREAM_PROC is not None and STREAM_PROC.poll() is None
 
 def cmd(args, capture=False, timeout=10):
     try:
@@ -24,33 +30,68 @@ def cmd(args, capture=False, timeout=10):
         return "" if capture else False
 
 def start_stream():
-    global STREAM_PID
-    if STREAM_PID:
+    global STREAM_PROC
+    if stream_running():
         return False
-    proc = subprocess.Popen([
+    STREAM_PROC = subprocess.Popen([
         "ffmpeg", "-f", "android_camera", "-input_device", "0",
         "-i", "0", "-c:v", "libx264", "-preset", "ultrafast",
         "-f", "rtsp", f"rtsp://0.0.0.0:{config['stream_port']}/live"
     ], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-    STREAM_PID = proc.pid
     return True
 
 def stop_stream():
-    global STREAM_PID
-    if not STREAM_PID:
+    global STREAM_PROC
+    if STREAM_PROC is None:
         return False
-    subprocess.run(["pkill", "-f", "ffmpeg.*android_camera"], capture_output=True)
-    STREAM_PID = None
+    if STREAM_PROC.poll() is None:
+        STREAM_PROC.terminate()
+    STREAM_PROC = None
     return True
 
 def get_ip():
     raw = cmd(["hostname", "-I"], capture=True)
     return raw.split()[0] if raw else "?"
 
+def sensor_values(payload, name):
+    """termux-sensor prints a JSON object keyed by sensor name
+    ({"Proximity sensor": {"values": [...]}}). Older docs showed a list of
+    {"name": ..., "values": [...]} objects; accept both so a Termux:API
+    format change does not silently break readings again."""
+    if isinstance(payload, dict):
+        entry = payload.get(name)
+        if isinstance(entry, dict):
+            return entry.get("values")
+        if name in payload and isinstance(payload[name], list):
+            return payload[name]
+        return None
+    if isinstance(payload, list):
+        for entry in payload:
+            if isinstance(entry, dict) and "values" in entry:
+                if entry.get("name") in (None, name) or len(payload) == 1:
+                    return entry["values"]
+    return None
+
+
+def format_sensors(data, limit=5):
+    """Render a termux-sensor reading (object keyed by sensor name) as text."""
+    if isinstance(data, dict):
+        items = [(name, (entry or {}).get("values", [])) for name, entry in data.items()]
+    else:  # tolerate the old list-of-objects shape
+        items = [(s.get("type", "?"), s.get("values", [])) for s in data]
+    lines = ["📡 Sensors"]
+    for name, vals in items[:limit]:
+        lines.append(f"  {name}: {', '.join(str(round(v, 2)) for v in vals)}")
+    return "\n".join(lines)
+
+
 app = Flask(__name__)
 
 def check_auth(pw):
-    return pw == config["web_password"]
+    if not pw:
+        return False
+    # Constant-time comparison: the dashboard is exposed on the local network.
+    return hmac.compare_digest(str(pw), str(config["web_password"]))
 
 def require_auth(f):
     @wraps(f)
@@ -127,7 +168,7 @@ def torch():
 @app.route("/stream", methods=["POST"])
 @require_auth
 def stream():
-    if STREAM_PID:
+    if stream_running():
         stop_stream()
         return jsonify({"stream": False})
     else:
@@ -145,7 +186,7 @@ def lock():
 def feed():
     def gen():
         while True:
-            if STREAM_PID:
+            if stream_running():
                 time.sleep(1)
                 continue
             try:
@@ -170,16 +211,18 @@ def status():
         pass
     try:
         sj = json.loads(cmd(["termux-sensor", "-s", "Proximity sensor", "-n", "1"], capture=True))
-        if sj and isinstance(sj, list) and "values" in sj[0]:
-            pro = round(sj[0]["values"][0], 1)
+        vals = sensor_values(sj, "Proximity sensor")
+        if vals:
+            pro = round(vals[0], 1)
     except:
         pass
-    return jsonify({"battery": bat, "proximity": pro, "stream": STREAM_PID is not None, "torch": TORCH_ON})
+    return jsonify({"battery": bat, "proximity": pro, "stream": stream_running(), "torch": TORCH_ON})
 
 app_bot = Application.builder().token(config["token"]).build()
 
 async def auth(update):
-    return update.effective_user.id in config["allowed_users"]
+    user = update.effective_user
+    return user is not None and user.id in config["allowed_users"]
 
 async def h_start(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     if not await auth(update): return await update.message.reply_text("Unauthorized")
@@ -217,7 +260,7 @@ async def h_torch(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
 
 async def h_stream(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     if not await auth(update): return
-    if STREAM_PID:
+    if stream_running():
         stop_stream()
         await update.message.reply_text("⏹️ Stream stopped")
     else:
@@ -252,13 +295,7 @@ async def h_sensors(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     if not await auth(update): return
     out = cmd(["termux-sensor", "-n", "1"], capture=True)
     try:
-        data = json.loads(out)
-        lines = ["📡 Sensors"]
-        for s in data[:5]:
-            name = s.get("type", "?")
-            vals = s.get("values", [])
-            lines.append(f"  {name}: {', '.join(str(round(v,2)) for v in vals)}")
-        await update.message.reply_text("\n".join(lines)[:4000])
+        await update.message.reply_text(format_sensors(json.loads(out))[:4000])
     except:
         await update.message.reply_text("❌ Could not read sensors")
 

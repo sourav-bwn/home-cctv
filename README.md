@@ -129,6 +129,17 @@ rtsp://192.168.x.x:8554/live
 /ping       — health check
 ```
 
+## Development
+
+Offline tests for the web API, sensor parsing, stream liveness and auth. No
+phone, camera or Telegram network needed (termux commands and the telegram
+package are stubbed):
+
+```bash
+pip install flask
+python3 -m unittest discover -s tests
+```
+
 ## License
 
 MIT

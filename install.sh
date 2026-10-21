@@ -19,7 +19,8 @@ echo -e "${YELLOW}[3/7]${NC} Installing Python, ffmpeg, Termux:API..."
 pkg install python ffmpeg termux-api -y
 
 echo -e "${YELLOW}[4/7]${NC} Installing Python libraries..."
-pip install python-telegram-bot flask --quiet
+curl -sL "$REPO/requirements.txt" -o /tmp/cctv_requirements.txt
+pip install -r /tmp/cctv_requirements.txt --quiet
 
 echo -e "${YELLOW}[5/7]${NC} Downloading bot..."
 curl -sL "$REPO/bot.py" -o ~/bot.py
