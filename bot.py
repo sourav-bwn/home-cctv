@@ -1,4 +1,4 @@
-import os, sys, json, signal, subprocess, threading, time, io
+import os, sys, json, signal, subprocess, threading, time, io, hmac
 from functools import wraps
 from flask import Flask, request, Response, jsonify
 from telegram import Update
@@ -88,7 +88,10 @@ def format_sensors(data, limit=5):
 app = Flask(__name__)
 
 def check_auth(pw):
-    return pw == config["web_password"]
+    if not pw:
+        return False
+    # Constant-time comparison: the dashboard is exposed on the local network.
+    return hmac.compare_digest(str(pw), str(config["web_password"]))
 
 def require_auth(f):
     @wraps(f)
@@ -218,7 +221,8 @@ def status():
 app_bot = Application.builder().token(config["token"]).build()
 
 async def auth(update):
-    return update.effective_user.id in config["allowed_users"]
+    user = update.effective_user
+    return user is not None and user.id in config["allowed_users"]
 
 async def h_start(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     if not await auth(update): return await update.message.reply_text("Unauthorized")
