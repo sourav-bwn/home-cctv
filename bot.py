@@ -47,6 +47,38 @@ def get_ip():
     raw = cmd(["hostname", "-I"], capture=True)
     return raw.split()[0] if raw else "?"
 
+def sensor_values(payload, name):
+    """termux-sensor prints a JSON object keyed by sensor name
+    ({"Proximity sensor": {"values": [...]}}). Older docs showed a list of
+    {"name": ..., "values": [...]} objects; accept both so a Termux:API
+    format change does not silently break readings again."""
+    if isinstance(payload, dict):
+        entry = payload.get(name)
+        if isinstance(entry, dict):
+            return entry.get("values")
+        if name in payload and isinstance(payload[name], list):
+            return payload[name]
+        return None
+    if isinstance(payload, list):
+        for entry in payload:
+            if isinstance(entry, dict) and "values" in entry:
+                if entry.get("name") in (None, name) or len(payload) == 1:
+                    return entry["values"]
+    return None
+
+
+def format_sensors(data, limit=5):
+    """Render a termux-sensor reading (object keyed by sensor name) as text."""
+    if isinstance(data, dict):
+        items = [(name, (entry or {}).get("values", [])) for name, entry in data.items()]
+    else:  # tolerate the old list-of-objects shape
+        items = [(s.get("type", "?"), s.get("values", [])) for s in data]
+    lines = ["📡 Sensors"]
+    for name, vals in items[:limit]:
+        lines.append(f"  {name}: {', '.join(str(round(v, 2)) for v in vals)}")
+    return "\n".join(lines)
+
+
 app = Flask(__name__)
 
 def check_auth(pw):
@@ -170,8 +202,9 @@ def status():
         pass
     try:
         sj = json.loads(cmd(["termux-sensor", "-s", "Proximity sensor", "-n", "1"], capture=True))
-        if sj and isinstance(sj, list) and "values" in sj[0]:
-            pro = round(sj[0]["values"][0], 1)
+        vals = sensor_values(sj, "Proximity sensor")
+        if vals:
+            pro = round(vals[0], 1)
     except:
         pass
     return jsonify({"battery": bat, "proximity": pro, "stream": STREAM_PID is not None, "torch": TORCH_ON})
@@ -252,13 +285,7 @@ async def h_sensors(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     if not await auth(update): return
     out = cmd(["termux-sensor", "-n", "1"], capture=True)
     try:
-        data = json.loads(out)
-        lines = ["📡 Sensors"]
-        for s in data[:5]:
-            name = s.get("type", "?")
-            vals = s.get("values", [])
-            lines.append(f"  {name}: {', '.join(str(round(v,2)) for v in vals)}")
-        await update.message.reply_text("\n".join(lines)[:4000])
+        await update.message.reply_text(format_sensors(json.loads(out))[:4000])
     except:
         await update.message.reply_text("❌ Could not read sensors")
 
