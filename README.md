@@ -97,6 +97,8 @@ Enter the web password you chose during setup. You'll see:
 - Photo, Torch, Stream, Lock buttons
 - Battery and sensor status
 
+> **Security note:** the dashboard listens on all network interfaces (`0.0.0.0`) so you can open it from other devices on your home network, and every page requires the web password. To restrict it to the old phone itself, edit `~/.cctv_config.json` and set `"web_host": "127.0.0.1"`, then restart the bot.
+
 ### In VLC (for RTSP stream)
 
 Open VLC → Open Network Stream → enter:
