@@ -321,7 +321,12 @@ for c, h in [("start", h_start), ("photo", h_photo), ("torch", h_torch),
     app_bot.add_handler(CommandHandler(c, h))
 
 if __name__ == "__main__":
-    t = threading.Thread(target=lambda: app.run(host="0.0.0.0", port=config["web_port"], debug=False), daemon=True)
+    # The dashboard is meant to be opened from other devices on the home
+    # network, so it binds 0.0.0.0 by default; every route requires the web
+    # password (constant-time Basic auth). Set "web_host": "127.0.0.1" in
+    # ~/.cctv_config.json to restrict it to localhost.
+    web_host = config.get("web_host", "0.0.0.0")
+    t = threading.Thread(target=lambda: app.run(host=web_host, port=config["web_port"], debug=False), daemon=True)
     t.start()
     print(f"✅ Bot + Web running on port {config['web_port']}")
     app_bot.run_polling()

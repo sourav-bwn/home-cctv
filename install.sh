@@ -42,7 +42,11 @@ import json, sys, os
 token, uid, pw = sys.argv[1], int(sys.argv[2]), sys.argv[3]
 config = {
     "token": token, "allowed_users": [uid],
-    "web_password": pw, "stream_port": 8554, "web_port": 5000
+    "web_password": pw, "stream_port": 8554, "web_port": 5000,
+    # The dashboard binds all interfaces so it can be opened from other
+    # devices on the home network; set "web_host": "127.0.0.1" to restrict
+    # it to this phone only.
+    "web_host": "0.0.0.0"
 }
 with open(os.path.expanduser("~/.cctv_config.json"), "w") as f:
     json.dump(config, f, indent=2)
